@@ -1,0 +1,3 @@
+-r requirements-api.txt
+# CUDA 12, NVIDIA GPU, x86_64 Linux only. Do not install alongside qiskit-aer.
+qiskit-aer-gpu==0.18.2

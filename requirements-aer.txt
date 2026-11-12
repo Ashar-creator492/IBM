@@ -1,0 +1,2 @@
+-r requirements-api.txt
+qiskit-aer==0.18.2

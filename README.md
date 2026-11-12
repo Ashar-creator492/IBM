@@ -5,9 +5,17 @@ Move delivery checkpoints, draw restricted airspace, and configure electronic
 warfare (EW) zones. The application computes safe grid paths, uses QAOA to choose
 a visiting order, and compares the sampled result with an exact classical answer.
 
-**IBM track:** one drone, one depot, three delivery checkpoints, 16 binary
-variables, and 16 simulated qubits. No IBM account, API key, paid service, or
+**Default IBM track:** one drone, one depot, three delivery checkpoints, 16 binary
+variables, and 16 simulated qubits. A separate optional six-location experiment
+uses a fixed depot, five targets, and 25 assignment qubits. No IBM account, API key, paid service, or
 physical quantum processor is required. D-Wave is not part of this implementation.
+
+## Detailed project report
+
+Read the [detailed project report PDF](output/pdf/Q_ROUTE_Detailed_Project_Report.pdf)
+or its [Markdown version](docs/PROJECT_REPORT.md) for the architecture,
+QAOA mathematics, UI and editor features, classical pathfinding, verified CPU/T4
+results, testing, and implementation limitations.
 
 ## Quick start for judges
 
@@ -62,7 +70,8 @@ The Python requirements pin:
 
 Pytest and the API test client dependency are also included. React, TypeScript,
 Vite, Tailwind, icons, and fonts install from `frontend/package-lock.json` through
-`npm ci`. No separate Aer, IBM Runtime, or cloud service setup is needed.
+`npm ci`. No separate Aer, IBM Runtime, or cloud service setup is needed for the default
+four-location mode. The optional 25-qubit experiment uses Aer as described below.
 
 ### 2. Start the backend - terminal 1
 
@@ -221,7 +230,7 @@ On Windows, replace `.venv/bin/python` with `.\.venv\Scripts\python.exe` and use
 The documented full app launch uses Vite's development proxy; the static build
 alone does not start FastAPI or configure an `/api` proxy.
 
-Latest implementation verification: **31 Python tests passed**, **8 frontend
+Latest implementation verification: **39 Python tests passed**, **9 frontend
 logic/playback tests passed**, and the production build passed. Coverage includes
 original Qiskit behavior, geometry, path connectivity and costs, blocked missions,
 EW boundary conservatism, edited matrices reaching QAOA, stale revisions, and
@@ -305,3 +314,108 @@ Original decorative image provenance and generation prompts are in
 [asset notes](frontend/public/images/ASSETS.md). Fonts and images are bundled
 locally; mountain imagery is decorative, not a geographic mission map. The landing
 route preview is illustrative and is explicitly labeled as not a solver result.
+
+
+## Experimental six-location mode: 25 qubits
+
+The four-location mode and its original circuit remain available and unchanged.
+Select **Experimental - 6 locations / 25 qubits** in Route Lab to load one depot
+and five editable targets. Fifteen Dijkstra paths supply the cost matrix; exact
+verification enumerates **120** depot-first tours. The visiting order always
+starts and ends at depot 0. This remains a single-drone IBM experiment.
+
+The new encoding fixes the depot outside the assignment matrix. Five targets
+assigned to five tour positions require **25 binary variables / qubits**, rather
+than the 36 required by the original full six-by-six encoding. Ten one-hot
+constraints remain. Departure from the depot and return to it are linear terms;
+travel between consecutive target positions is quadratic. Both quantum and exact
+classical solvers use the same edited-grid distances.
+
+To reduce invalid assignments, the experimental circuit begins with independent
+one-excitation W states for each target row and uses an XY mixer preserving that
+row's excitation count. It does **not** start from a classically optimal tour.
+Column uniqueness remains an energy constraint and is validated after sampling;
+feasibility and optimality are not guaranteed. This mixer and initialization apply
+only to the experimental fixed-depot circuit; the original X-mixer circuit is
+unchanged. QAOA layers still have two adjustable angles each.
+
+### Local CPU experiment
+
+Install the optional Aer package in the existing environment:
+
+```sh
+.venv/bin/python -m pip install -r requirements-aer.txt
+```
+
+Restart the API and refresh the frontend. In the experimental mode choose
+**Aer CPU - explicit local experiment**. The default experimental preset is
+**8 COBYLA evaluations, 1 layer, 4,096 shots**. A 25-qubit double-precision state
+alone needs **512 MiB**; execution uses additional buffers and can take substantially
+longer than the 16-qubit demo. Do not interpret animation duration as solver time.
+
+The terminal equivalent is:
+
+```sh
+.venv/bin/python -m ibm_qiskit.qiskit_experimental --device CPU --maxiter 8 --layers 1 --shots 4096 --output output/six_cpu_result.json
+```
+
+To construct and inspect the actual 25-qubit circuit without running it:
+
+```sh
+.venv/bin/python -m ibm_qiskit.qiskit_experimental --model-only
+```
+
+### NVIDIA GPU / Google Colab experiment
+
+GPU execution requires a compatible NVIDIA GPU and CUDA 12 on x86_64 Linux.
+Apple Silicon's GPU is not an NVIDIA CUDA device. The GPU package is optional;
+selecting GPU on an unsupported installation reports an error, with **no silent
+CPU fallback**. See the upstream [Aer GPU installation instructions](https://github.com/Qiskit/qiskit-aer#installing-gpu-support).
+
+For a suitable Linux environment, install `requirements-gpu.txt` in a fresh virtual
+environment instead of `requirements-aer.txt`. Do not install `qiskit-aer` and
+`qiskit-aer-gpu` together. The GPU CLI command uses `--device GPU`.
+
+For Colab:
+
+1. Download/open [Q_Route_25_Qubit_GPU.ipynb](notebooks/Q_Route_25_Qubit_GPU.ipynb)
+   using Colab's **Upload notebook** action.
+2. Select a GPU under **Runtime > Change runtime type**. Free GPU allocation is
+   subject to availability; this project does not guarantee access or runtime.
+3. Run the upload cell and select the supplied
+   [q_route_gpu_source.zip](output/colab/q_route_gpu_source.zip).
+4. Run the installation, device check, and execution cells in order. The notebook
+   installs the pinned GPU dependencies, runs the real Qiskit Aer primitives,
+   reports actual measurements and times, and lets you download the result JSON.
+
+The source ZIP bundles the current Python implementation, so the notebook does
+not depend on a GitHub branch having already been pushed. Rebuild it after Python
+source changes with `python3 scripts/package_colab.py`. This is a standalone
+notebook experiment; it does not automatically connect the Mac's frontend to a
+remote Colab server. The local editor can use an explicitly selected Aer CPU, or
+an API running on a compatible GPU host with the documented local frontend proxy.
+
+`GET /api/simulator` reports the installed Aer devices. Editable mission endpoints
+accept exactly four or six locations. `POST /api/mission/run` accepts an additional
+`device: "GPU"` or `device: "CPU"` for six-location execution; device defaults to
+GPU for that mode and is ignored by the unchanged four-location solver. Results
+include `node_count`, `formulation`, `mixer`, and `simulator_device` metadata.
+
+GPU execution was subsequently verified on a Google Colab T4: 25 qubits, 8
+evaluations, 1 layer, 4,096 shots, and 13.297 seconds of solver time. It returned
+142 feasible shots and a safe route costing 19.878788, matching the exact optimum.
+COBYLA stopped at its evaluation limit without convergence. See the
+[actual GPU result](output/experiments/six_gpu_result.json) and
+[run notes](output/experiments/six_gpu_run_notes.md). This excludes installation
+and runtime allocation time; no quantum speedup is claimed. NVIDIA GPU execution
+is not available on this Mac; model and CPU checks run locally.
+
+
+Verified experimental CPU run (Aer 0.18.2, 8 evaluations, 1 layer, 4,096 shots,
+seed 7): **25 qubits**, circuit depth **63**, **142 feasible shots**, route
+`0 -> 4 -> 2 -> 5 -> 3 -> 1 -> 0`, cost **19.878788**, matching the exact optimum.
+Measured solver runtime was **124.898 seconds** on this local CPU; it is not a
+GPU benchmark or runtime promise. COBYLA reached its evaluation limit without
+convergence. The [actual result record](output/experiments/six_cpu_result.json)
+contains the samples, parameters, history, circuit, and comparison. The earlier
+uniform/X-mixer baseline found zero feasible samples; it was not labeled success.

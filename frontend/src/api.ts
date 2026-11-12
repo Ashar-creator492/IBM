@@ -20,6 +20,10 @@ export interface Config {
   seed: number;
 }
 export interface Result {
+  mixer?: string;
+  node_count?: number;
+  formulation?: string;
+  simulator_device?: string;
   qubits: number;
   circuit_depth: number;
   iterations: number;

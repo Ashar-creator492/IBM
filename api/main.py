@@ -80,6 +80,10 @@ class RunResponse(Model):
     layers: int
     circuit_text: str
     top_samples: list[Sample]
+    mixer: str = "x"
+    node_count: int = 4
+    formulation: str = "full_assignment"
+    simulator_device: str = "CPU"
     matched_optimum: bool
 
 
@@ -110,23 +114,35 @@ def optimize(request: RunRequest):
     return solve(request, make_map())
 
 
-def solve(request, route_map):
+def solve(request, route_map, device="GPU"):
     # Sync routes run in FastAPI's thread pool; health/map remain responsive.
     if not solver_lock.acquire(blocking=False):
         raise HTTPException(409, "A simulation is already running. Please wait.")
     try:
-        result = run_qaoa(route_map, **request.model_dump())
+        six = len(route_map.nodes) == 6
+        if six:
+            from ibm_qiskit.qiskit_fixed import run_fixed_qaoa
+            result = run_fixed_qaoa(route_map, device=device, **request.model_dump())
+        else:
+            result = run_qaoa(route_map, **request.model_dump())
         data = asdict(result)
+        data.update(mixer='row_preserving_xy' if six else 'x', node_count=len(route_map.nodes), formulation='fixed_depot' if six else 'full_assignment', simulator_device=device if six else 'CPU')
         counts = data.pop('counts')
         data['top_samples'] = []
         for bitstring, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:10]:
-            route, reason = decode_bits(bitstring_to_bits(bitstring), route_map)
+            if six:
+                from ibm_qiskit.qiskit_fixed import decode_fixed_bits
+                route, reason = decode_fixed_bits(bitstring_to_bits(bitstring), route_map)
+            else:
+                route, reason = decode_bits(bitstring_to_bits(bitstring), route_map)
             data['top_samples'].append(dict(bitstring=bitstring, count=count,
                                             feasible=route is not None, reason=reason))
         data['matched_optimum'] = (result.best_feasible_cost is not None
             and abs(result.best_feasible_cost - exact_tours(route_map)[0][0]) < 1e-9)
         return data
     except Exception as error:
+        if len(route_map.nodes)==6 and isinstance(error, (RuntimeError,ImportError)):
+            raise HTTPException(503, f"Experimental simulator unavailable: {error}") from error
         logging.exception("Local QAOA simulation failed")
         raise HTTPException(500, "Local simulation failed. Check the backend terminal and retry.") from error
     finally:
@@ -156,7 +172,7 @@ def optimize_grid(request: RunRequest, size: int = 40, scenario: str = "demo"):
         raise HTTPException(422, str(error)) from error
     return solve(request, route_map)
 
-# Editable missions retain exactly four node/position assignments (16 variables).
+# Editable missions support the original four-node model and separate fixed-depot six-node model.
 from typing import Literal, Annotated
 from pydantic import model_validator
 
@@ -169,7 +185,7 @@ class Zone(Model):
 class MissionEnvironment(Model):
     size: int = Field(ge=24, le=64, strict=True)
     revision: int = Field(ge=0, strict=True)
-    nodes: list[tuple[CellCoordinate, CellCoordinate]] = Field(min_length=4,max_length=4)
+    nodes: list[tuple[CellCoordinate, CellCoordinate]] = Field(min_length=4,max_length=6)
     obstacles: list[tuple[CellCoordinate, CellCoordinate]] = Field(max_length=4096)
     zones: list[Zone] = Field(max_length=4)
     pathfinding: Literal['dijkstra'] = 'dijkstra'
@@ -177,6 +193,8 @@ class MissionEnvironment(Model):
     @model_validator(mode='after')
     def finite_zones(self):
         import math
+        if len(self.nodes) not in (4,6):
+            raise ValueError('Select four-node regression mode or six-node experimental mode')
         if any(not math.isfinite(z.radius) or any(not math.isfinite(v) for v in z.center) for z in self.zones):
             raise ValueError('Zone values must be finite')
         return self
@@ -184,6 +202,7 @@ class MissionEnvironment(Model):
 class MissionRun(Model):
     environment: MissionEnvironment
     config: RunRequest
+    device: Literal['CPU','GPU'] = 'GPU'
 
 
 def evaluate_environment(environment):
@@ -199,7 +218,7 @@ def evaluate_environment(environment):
     data['classical']=dict(route=route,cost=cost,safe=safe,
                            elapsed_seconds=perf_counter()-started,tours_evaluated=len(tours))
     return route_map,dict(feasible=True,revision=environment.revision,
-                         status='Mission ready',message='All four checkpoints connected',grid=data)
+                         status='Mission ready',message=f'All {len(environment.nodes)} checkpoints connected',grid=data)
 
 @app.post('/api/mission/validate')
 def validate_mission(environment: MissionEnvironment):
@@ -210,7 +229,17 @@ def run_mission(request: MissionRun):
     route_map, validation = evaluate_environment(request.environment)
     if route_map is None:
         return {**validation,'result':None}
-    result = solve(request.config,route_map)
+    result = solve(request.config,route_map,request.device)
     # Every decoded tour uses only prevalidated, safe navigable pair paths.
     return {**validation,'status': 'Mission ready' if result['best_feasible_route'] else
             'No feasible QAOA sample', 'result':result}
+
+
+@app.get('/api/simulator')
+def simulator_capabilities():
+    try:
+        from qiskit_aer import AerSimulator
+        return dict(aer_installed=True,devices=list(AerSimulator().available_devices()),
+                    experimental_qubits=25,raw_state_mib=512)
+    except ImportError:
+        return dict(aer_installed=False,devices=[],experimental_qubits=25,raw_state_mib=512)

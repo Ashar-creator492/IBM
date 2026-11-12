@@ -22,3 +22,13 @@ test('flight follows the concatenated computed cells in both directions without 
  for(const route of [[0,1,2,3,0],[0,3,2,1,0]]){const {path,stops}=stitchRoute(route,pairs);assert.deepEqual(path[0],path.at(-1));assert.equal(stops.size,4);for(let i=1;i<path.length;i++)assert.equal(Math.abs(path[i][0]-path[i-1][0])+Math.abs(path[i][1]-path[i-1][1]),1);}
  assert.deepEqual(pairs,original);assert.deepEqual(stitchRoute([0,2,0],pairs).path,[]);
 });
+
+test('experimental editor and flight support six locations while retaining four-location behavior',()=>{
+ const e=env();e.nodes.push([5,18],[18,5]);assert.equal(e.nodes.length,6);
+ const moved=moveCheckpoint(e,5,[19,7]);assert.deepEqual(moved.nodes[5],[19,7]);assert.equal(env().nodes.length,4);
+ const route=[0,1,2,3,4,5,0];const nodes=[[1,1],[2,1],[3,1],[4,1],[5,1],[6,1]];
+ const pairs=[];
+ for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++)pairs.push({source:i,target:j,path:Array.from({length:j-i+1},(_,k)=>[i+k+1,1])});
+ const stitched=stitchRoute(route,pairs);assert.equal(stitched.stops.size,6);assert.deepEqual(stitched.path[0],stitched.path.at(-1));
+ for(let i=1;i<stitched.path.length;i++)assert.equal(Math.abs(stitched.path[i][0]-stitched.path[i-1][0])+Math.abs(stitched.path[i][1]-stitched.path[i-1][1]),1);
+});

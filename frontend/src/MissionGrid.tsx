@@ -181,7 +181,7 @@ export const MissionGrid = forwardRef<
   const completedLegs = revealed
     ? [...stops].filter((s) => s <= progress).length
     : 0;
-  const destination = route?.[Math.min(completedLegs + 1, 4)];
+  const destination = route?.[Math.min(completedLegs + 1, view.nodes.length)];
   const visited = new Set(route?.slice(0, completedLegs + 1) ?? []);
   const cellPath = (cells: Cell[]) =>
     cells.map(([x, y]) => `M${x} ${y}h1v1h-1z`).join("");
@@ -229,8 +229,9 @@ export const MissionGrid = forwardRef<
         </div>
       )}
       <p className="mission-status" role="status">
-        {missionStatus} · 4 checkpoints · {blockedCount} blocked cells (
-        {view.obstacles.length} obstacle cells) · {view.zones.length} EW zones
+        {missionStatus} · {view.nodes.length} checkpoints · {blockedCount}{" "}
+        blocked cells ({view.obstacles.length} obstacle cells) ·{" "}
+        {view.zones.length} EW zones
         {environment ? ` · Revision ${environment.revision}` : ""}
       </p>
       <div className="mission-toolbar">
@@ -263,7 +264,7 @@ export const MissionGrid = forwardRef<
         <p className="mission-status">
           {stage === "Mission complete"
             ? "Simulated flight complete · returned to depot"
-            : `Destination 0${destination} · ${Math.min(3, completedLegs)} / 3 deliveries · ${Math.round((progress / Math.max(1, path.length - 1)) * 100)}% flight progress`}
+            : `Destination 0${destination} · ${Math.min(view.nodes.length - 1, completedLegs)} / ${view.nodes.length - 1} deliveries · ${Math.round((progress / Math.max(1, path.length - 1)) * 100)}% flight progress`}
         </p>
       )}
       <svg

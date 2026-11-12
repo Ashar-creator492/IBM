@@ -13,7 +13,7 @@ class DisconnectedMission(ValueError):
 def build_grid(size=40, scenario="demo", *, exclude_ew=True, environment=None):
     if not 24 <= size <= 64:
         raise ValueError('Grid size must be between 24 and 64')
-    if scenario not in ("demo", "regression"):
+    if scenario not in ("demo", "regression", "six"):
         raise ValueError("Unknown grid scenario")
     started = perf_counter()
     base = make_map()
@@ -21,7 +21,7 @@ def build_grid(size=40, scenario="demo", *, exclude_ew=True, environment=None):
     nodes = [(3, size-4), (3, 3), (size-4, 3), (size-4, size-4)]
     def world(cell):
         return ((cell[0]-3)*step, (size-4-cell[1])*step)
-    if scenario == "demo":
+    if scenario in ("demo", "six"):
         nodes = [(round(x*(size-1)), round(y*(size-1)))
                  for x,y in [(0.15,.25),(.50,.30),(.50,.75),(.85,.65)]]
         # Two full-height baffles with staggered gates force a serpentine corridor.
@@ -36,6 +36,9 @@ def build_grid(size=40, scenario="demo", *, exclude_ew=True, environment=None):
         obstacles = {(x,y) for x in range(size) for y in range(size)
                      if any(a*size <= x <= c*size and b*size <= y <= d*size
                             for a,b,c,d in footprints)}
+    if scenario == "six":
+        nodes += [(round(.14*(size-1)),round(.79*(size-1))),
+                  (round(.85*(size-1)),round(.20*(size-1)))]
     zones = [dict(center=[(size-1)/2]*2, radius=base.threat_radius/step)]
     if environment is not None:
         nodes = [tuple(c) for c in environment['nodes']]
@@ -43,8 +46,8 @@ def build_grid(size=40, scenario="demo", *, exclude_ew=True, environment=None):
         zones = environment['zones']
         if any(any(v < 0 or v >= size for v in z['center']) for z in zones):
             raise ValueError('Invalid configuration: EW center outside grid')
-        if len(nodes) != 4 or len(set(nodes)) != 4:
-            raise ValueError("Invalid configuration: exactly four distinct checkpoints required")
+        if len(nodes) not in (4,6) or len(set(nodes)) != len(nodes):
+            raise ValueError("Invalid configuration: exactly four or six distinct checkpoints required")
         if any(not (0 <= x < size and 0 <= y < size) for x,y in [*nodes,*obstacles]):
             raise ValueError("Invalid configuration: cells must be within grid bounds")
     # For editable missions block every cell whose square touches an EW circle.
@@ -57,10 +60,11 @@ def build_grid(size=40, scenario="demo", *, exclude_ew=True, environment=None):
     covered = [i for i,node in enumerate(nodes) if node in blocked]
     if covered:
         raise ValueError("No safe grid path: checkpoint(s) " + ', '.join(f'{i:02d}' for i in covered) + " covered by obstacles or EW exclusion")
-    costs = [[0.0]*4 for _ in range(4)]
+    count=len(nodes)
+    costs = [[0.0]*count for _ in range(count)]
     pairs = []
-    for i in range(4):
-        for j in range(i+1,4):
+    for i in range(count):
+        for j in range(i+1,count):
             source, target = nodes[i], nodes[j]
             queue, distance, parent, explored = [(0,source)], {source:0}, {}, []
             frontier = {source}
@@ -102,7 +106,7 @@ def build_grid(size=40, scenario="demo", *, exclude_ew=True, environment=None):
             pairs.append(dict(source=i,target=j,path=path,explored=explored,frontier_steps=frontier_steps,cost=costs[i][j]))
     matrix = tuple(tuple(row) for row in costs)
     route_map = replace(base, nodes=tuple(world(node) for node in nodes), distances=matrix, costs=matrix,
-                        unsafe_edges=tuple((False,)*4 for _ in range(4)))
+                        unsafe_edges=tuple((False,)*count for _ in range(count)))
     data = dict(scenario=scenario,size=size,step=step,nodes=nodes,obstacles=sorted(obstacles),
                 danger=sorted(danger),pairs=pairs,search_seconds=perf_counter()-started,
                 threat_center=[(size-1)/2]*2,threat_radius=base.threat_radius/step)

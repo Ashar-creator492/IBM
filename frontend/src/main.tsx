@@ -466,6 +466,16 @@ function App() {
     layers: 2,
     seed: 7,
   });
+  const [device, setDevice] = useState<"CPU" | "GPU">("GPU");
+  const [simulator, setSimulator] = useState<{
+    aer_installed: boolean;
+    devices: string[];
+  } | null>(null);
+  useEffect(() => {
+    request<{ aer_installed: boolean; devices: string[] }>("simulator")
+      .then(setSimulator)
+      .catch(() => setSimulator(null));
+  }, []);
   const [heroMap, setHeroMap] = useState<RouteMap | null>(null);
   const [controlsHost, setControlsHost] = useState<HTMLDivElement | null>(null);
   const running = useRef(false);
@@ -563,8 +573,11 @@ function App() {
       });
   };
   useEffect(load, []);
+  const experimental = editor.environment?.nodes.length === 6;
+  const simulatorReady = !experimental || !!simulator?.devices.includes(device);
   async function run() {
-    if (running.current || !ready || !editor.environment) return;
+    if (running.current || !ready || !editor.environment || !simulatorReady)
+      return;
     running.current = true;
     setBusy(true);
     setError("");
@@ -576,6 +589,7 @@ function App() {
       const response = await request<Validation>("mission/run", {
         environment: editor.environment,
         config,
+        device,
       });
       if (
         token !== runToken.current ||
@@ -918,6 +932,8 @@ function App() {
                         );
                         setGrid(g);
                         editor.load(g.environment);
+                        if (g.environment.nodes.length === 6)
+                          setConfig((c) => ({ ...c, maxiter: 8, layers: 1 }));
                         setMap(g.map);
                         setClassical(g.classical);
                         setResult(null);
@@ -931,10 +947,41 @@ function App() {
                     <option value="demo">
                       Corridor mission · interior targets
                     </option>
+                    <option value="six">
+                      Experimental · 6 locations / 25 qubits
+                    </option>
                     <option value="regression">
                       Original corner grid · regression
                     </option>
                   </select>
+                  {experimental && (
+                    <>
+                      <label htmlFor="simulator-device">
+                        Experimental simulator
+                      </label>
+                      <select
+                        id="simulator-device"
+                        value={device}
+                        onChange={(e) =>
+                          setDevice(e.target.value as "CPU" | "GPU")
+                        }
+                      >
+                        <option value="GPU">
+                          NVIDIA GPU · Aer / CUDA Linux
+                        </option>
+                        <option value="CPU">
+                          Aer CPU · explicit local experiment
+                        </option>
+                      </select>
+                      <p className="caption">
+                        25 qubits, fixed depot, row-preserving XY mixer, 120
+                        exact tours. Raw state: 512 MiB plus overhead.{" "}
+                        {simulatorReady
+                          ? `Selected execution: ${device}. Start with 8 evaluations and 1 layer.`
+                          : "Selected simulator unavailable. Install the optional requirements and restart the API; no CPU fallback is used."}
+                      </p>
+                    </>
+                  )}
                   <label htmlFor="grid-size">Grid resolution</label>
                   <select
                     id="grid-size"
@@ -1014,7 +1061,7 @@ function App() {
                   </select>
                   <button
                     className="button primary run-button"
-                    disabled={!connected || busy || !ready}
+                    disabled={!connected || busy || !ready || !simulatorReady}
                     type="submit"
                   >
                     {busy ? (
@@ -1075,6 +1122,13 @@ function App() {
                 <div className="result-metrics">
                   {[
                     ["QUBITS", result.qubits],
+                    ["SIMULATOR", result.simulator_device ?? "CPU"],
+                    [
+                      "ENCODING",
+                      result.formulation === "fixed_depot"
+                        ? "Fixed depot"
+                        : "Full assignment",
+                    ],
                     ["CIRCUIT DEPTH", result.circuit_depth],
                     ["LAYERS", result.layers],
                     ["SHOTS", result.shots.toLocaleString()],
@@ -1155,9 +1209,9 @@ function App() {
                     </span>
                   </div>
                   <p>
-                    All six depot-first tours enumerated. Timing covers
-                    enumeration only; QAOA timing includes circuit setup,
-                    optimization and sampling.
+                    All {classical?.tours_evaluated ?? 6} depot-first tours
+                    enumerated. Timing covers enumeration only; QAOA timing
+                    includes circuit setup, optimization and sampling.
                   </p>
                 </article>
               </div>
@@ -1207,8 +1261,8 @@ function App() {
               </div>
               <p className="hardware-note">
                 Runs on your CPU with Qiskit's local quantum simulator. No
-                physical quantum processor is used. All six tours provide an
-                exact classical check.
+                physical quantum processor is used. Exact enumeration checks
+                every depot-first order.
               </p>
             </div>
             <div className="disclosures">
@@ -1248,7 +1302,7 @@ function App() {
                       excluded; the original straight-edge model uses{" "}
                       {map.unsafe_penalty.toLocaleString()} as its unsafe-edge
                       penalty. Grid costs include closing travel back to the
-                      depot is included.
+                      depot.
                     </p>
                   </div>
                 )}
@@ -1258,10 +1312,14 @@ function App() {
                   02 / Assignment & constraints <ChevronDown size={16} />
                 </summary>
                 <p>
-                  16 binary variables xᵢ,ₚ encode node i at position p. For each
-                  node, Σₚ xᵢ,ₚ = 1. For each position, Σᵢ xᵢ,ₚ = 1. All 8
-                  constraints remain in the model. Decoded cycles rotate to
-                  begin and end at depot 0.
+                  {experimental
+                    ? "25 binary variables assign five targets to five positions; depot 0 is fixed outside the assignment. There are ten one-hot constraints."
+                    : "16 binary variables xᵢ,ₚ encode node i at position p."}{" "}
+                  For each node, Σₚ xᵢ,ₚ = 1. For each position, Σᵢ xᵢ,ₚ = 1.
+                  All 8 constraints remain in the four-location model. The
+                  fixed-depot variant includes linear depot departure and return
+                  costs instead of cyclic depot variables. Decoded cycles rotate
+                  to begin and end at depot 0.
                 </p>
               </details>
               <details>
@@ -1269,11 +1327,12 @@ function App() {
                   03 / QUBO & Ising Hamiltonian <ChevronDown size={16} />
                 </summary>
                 <p>
-                  Minimize Σₚ Σᵢ≠ⱼ Wᵢⱼ xᵢ,ₚ xⱼ,(ₚ₊₁) mod 4, plus 1,000 times the
-                  sum of squared assignment violations. Qiskit converts x = (1 −
-                  Z)/2 into an Ising Hamiltonian and constant offset. Constraint
-                  feasibility and geometric threat avoidance are independently
-                  validated.
+                  {experimental
+                    ? "Minimize travel between consecutive target positions plus depot-to-first and last-to-depot linear terms, with 1,000 times squared one-hot violations."
+                    : "Minimize cyclic travel across all four assigned positions plus 1,000 times squared assignment violations."}{" "}
+                  Qiskit converts x = (1 − Z)/2 into an Ising Hamiltonian and
+                  constant offset. Constraint feasibility and geometric threat
+                  avoidance are independently validated.
                 </p>
               </details>
               <details>
