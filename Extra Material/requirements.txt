@@ -1,0 +1,9 @@
+numpy
+pandas
+plotly
+shapely
+dimod
+dwave-samplers
+streamlit>=1.50
+# only needed for real D-Wave runs (needs a Leap token):
+dwave-system
